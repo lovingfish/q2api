@@ -327,8 +327,27 @@ async def send_chat_request(
         if stream:
             # If raw_payload is used, we might want the raw event stream
             if raw_payload:
-                return None, None, tracker, _iter_events()
-            return None, tracker.track(_iter_text()), tracker, None
+                # Wrap generator to ensure cleanup on early termination
+                async def _safe_iter_events():
+                    try:
+                        async for item in _iter_events():
+                            yield item
+                    except GeneratorExit:
+                        # Generator was closed without being fully consumed
+                        # The finally block in _iter_events will handle cleanup
+                        raise
+                return None, None, tracker, _safe_iter_events()
+            
+            # Wrap text generator to ensure cleanup on early termination
+            async def _safe_iter_text():
+                try:
+                    async for item in tracker.track(_iter_text()):
+                        yield item
+                except GeneratorExit:
+                    # Generator was closed without being fully consumed
+                    # The finally block in _iter_events will handle cleanup
+                    raise
+            return None, _safe_iter_text(), tracker, None
         else:
             buf = []
             try:
