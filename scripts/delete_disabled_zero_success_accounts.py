@@ -1,57 +1,45 @@
 #!/usr/bin/env python3
-import sqlite3
 import sys
+import asyncio
 from pathlib import Path
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / "data.sqlite3"
+from db import init_db, close_db
 
 
-def delete_disabled_accounts() -> int:
+async def delete_disabled_accounts() -> int:
     """
-    Delete accounts where enabled=0 AND success_count=0 from the SQLite database.
+    Delete accounts where enabled=0 AND success_count=0 from the database.
     Returns the number of rows deleted.
     """
-    if not DB_PATH.exists():
-        print(f"Database not found: {DB_PATH}")
-        return 0
+    db = await init_db()
 
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
-            # Ensure table exists
-            tbl_cur = conn.execute(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='accounts'"
-            )
-            if (tbl_cur.fetchone() or [0])[0] == 0:
-                print("Table 'accounts' not found in database.")
-                return 0
+        # Count first for clear reporting
+        count_row = await db.fetchone("SELECT COUNT(*) as cnt FROM accounts WHERE enabled=0 AND success_count=0")
+        count = count_row['cnt'] if count_row else 0
 
-            # Check column 'enabled' existence
-            cols = [row[1] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()]
-            if "enabled" not in cols:
-                print("Column 'enabled' not found in 'accounts' table.")
-                return 0
-            if "success_count" not in cols:
-                print("Column 'success_count' not found in 'accounts' table.")
-                return 0
+        if count > 0:
+            await db.execute("DELETE FROM accounts WHERE enabled=0 AND success_count=0")
 
-            # Count first for clear reporting, then delete
-            count = (conn.execute("SELECT COUNT(*) FROM accounts WHERE enabled=0 AND success_count=0").fetchone() or [0])[0]
-            conn.execute("DELETE FROM accounts WHERE enabled=0 AND success_count=0")
-            conn.commit()
-            print(f"Deleted {count} disabled account(s) with zero success count.")
-            return int(count)
-    except sqlite3.Error as e:
-        print(f"SQLite error: {e}", file=sys.stderr)
+        print(f"Deleted {count} disabled account(s) with zero success count.")
+        return int(count)
+    except Exception as e:
+        print(f"Database error: {e}", file=sys.stderr)
         return 0
+    finally:
+        await close_db()
+
+
+async def main_async() -> None:
+    await delete_disabled_accounts()
+    sys.exit(0)
 
 
 def main() -> None:
-    deleted = delete_disabled_accounts()
-    # exit code 0 even if none deleted; non-zero only on sqlite error already handled
-    sys.exit(0)
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

@@ -3,20 +3,21 @@ import os
 import sys
 import time
 import uuid
-import json
 import asyncio
 import traceback
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 import httpx
-import aiosqlite
 from dotenv import load_dotenv
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from db import init_db, close_db, row_to_dict
+
 # --- 配置 ---
-# 脚本将自动查找项目根目录下的 .env 文件并加载
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / "data.sqlite3"
 load_dotenv(BASE_DIR / ".env")
 # --- 配置结束 ---
 
@@ -44,7 +45,7 @@ def _oidc_headers() -> Dict[str, str]:
     }
 
 async def refresh_single_account_token(
-    conn: aiosqlite.Connection,
+    db,
     account: Dict[str, Any],
     client: httpx.AsyncClient
 ) -> bool:
@@ -77,7 +78,7 @@ async def refresh_single_account_token(
         now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
 
         # 刷新成功: 启用账号，重置错误计数，更新token
-        await conn.execute(
+        await db.execute(
             """
             UPDATE accounts
             SET accessToken=?, refreshToken=?, last_refresh_time=?, last_refresh_status=?,
@@ -86,7 +87,6 @@ async def refresh_single_account_token(
             """,
             (new_access, new_refresh, now, "success", now, account_id),
         )
-        await conn.commit()
         print(f"  [✅] 账号 {label} 刷新成功并已重新启用。")
         return True
 
@@ -97,22 +97,20 @@ async def refresh_single_account_token(
             error_detail = e.response.json().get("error_description", str(e))
         except Exception:
             pass
-        
+
         now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-        await conn.execute(
+        await db.execute(
             "UPDATE accounts SET last_refresh_time=?, last_refresh_status=?, updated_at=? WHERE id=?",
             (now, "failed", now, account_id),
         )
-        await conn.commit()
         print(f"  [❌] 账号 {label} 刷新失败: {error_detail}")
         return False
     except Exception as e:
         now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-        await conn.execute(
+        await db.execute(
             "UPDATE accounts SET last_refresh_time=?, last_refresh_status=?, updated_at=? WHERE id=?",
             (now, "failed", now, account_id),
         )
-        await conn.commit()
         print(f"  [❌] 账号 {label} 发生未知错误: {e}")
         traceback.print_exc()
         return False
@@ -120,26 +118,17 @@ async def refresh_single_account_token(
 
 async def main():
     """脚本主逻辑。"""
-    if not DB_PATH.exists():
-        print(f"错误: 数据库文件未找到: {DB_PATH}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        conn = await aiosqlite.connect(DB_PATH)
-        conn.row_factory = aiosqlite.Row
-    except aiosqlite.Error as e:
-        print(f"数据库连接错误: {e}", file=sys.stderr)
-        sys.exit(1)
+    db = await init_db()
 
     # 查找目标账号
-    cursor = await conn.execute(
+    accounts_to_retry = await db.fetchall(
         "SELECT * FROM accounts WHERE enabled = 0 AND last_refresh_status = 'failed'"
     )
-    accounts_to_retry = await cursor.fetchall()
+    accounts_to_retry = [row_to_dict(acc) for acc in accounts_to_retry]
 
     if not accounts_to_retry:
         print("没有找到因刷新失败而被禁用的账号。")
-        await conn.close()
+        await close_db()
         return
 
     print(f"找到 {len(accounts_to_retry)} 个需要重试的账号...")
@@ -157,24 +146,23 @@ async def main():
                 "https://": httpx.AsyncHTTPTransport(proxy=proxy_url),
                 "http://": httpx.AsyncHTTPTransport(proxy=proxy_url),
             }
-    
+
     async with httpx.AsyncClient(mounts=mounts, timeout=60.0) as client:
-        for i, acc_row in enumerate(accounts_to_retry):
-            account = dict(acc_row)
+        for i, account in enumerate(accounts_to_retry):
             label = account.get("label") or account.get("id", "未知ID")[:8]
             print(f"\n--- ({i+1}/{len(accounts_to_retry)}) 正在处理账号: {label} ---")
-            
-            is_success = await refresh_single_account_token(conn, account, client)
+
+            is_success = await refresh_single_account_token(db, account, client)
             if is_success:
                 success_count += 1
             else:
                 failure_count += 1
-            
+
             # 在账号之间添加短暂延迟，避免请求过于集中
             if i < len(accounts_to_retry) - 1:
                 await asyncio.sleep(1)
 
-    await conn.close()
+    await close_db()
 
     print("\n--- 操作完成 ---")
     print(f"成功启用: {success_count} 个账号")

@@ -35,7 +35,7 @@
 ### 网络与安全
 - **HTTP 代理支持** - 可配置代理服务器，支持所有 HTTP 请求
 - **API Key 白名单** - 可选的访问控制，支持开发模式
-- **持久化存储** - SQLite 数据库存储账号信息
+- **持久化存储** - 支持 SQLite（默认）、PostgreSQL、MySQL 数据库
 
 ## 🚀 部署
 
@@ -90,6 +90,11 @@ cp .env.example .env
 **.env 配置说明：**
 
 ```bash
+# 数据库连接URL（留空使用本地SQLite）
+# PostgreSQL: DATABASE_URL="postgres://user:password@host:5432/dbname?sslmode=require"
+# MySQL: DATABASE_URL="mysql://user:password@host:3306/dbname"
+DATABASE_URL=""
+
 # OpenAI 风格 API Key 白名单（仅用于授权，与账号无关）
 # 多个用逗号分隔，例如：OPENAI_KEYS="key1,key2,key3"
 # 留空则为开发模式，不校验 Authorization
@@ -334,6 +339,7 @@ with client.messages.stream(
 ```
 v2/
 ├── app.py                          # FastAPI 主应用
+├── db.py                           # 数据库抽象层 (SQLite/PG/MySQL)
 ├── replicate.py                    # Amazon Q 请求复刻
 ├── auth_flow.py                    # 设备授权登录
 ├── claude_types.py                 # Claude API 类型定义
@@ -359,7 +365,7 @@ v2/
 ## 🛠️ 技术栈
 
 - **后端框架**: FastAPI + Python 3.11+
-- **数据库**: SQLite3 + aiosqlite
+- **数据库**: SQLite3 (aiosqlite) / PostgreSQL (asyncpg) / MySQL (aiomysql)
 - **HTTP 客户端**: httpx（支持异步和代理）
 - **Token 计数**: tiktoken
 - **前端**: 纯 HTML/CSS/JavaScript（无依赖）
@@ -371,6 +377,7 @@ v2/
 
 | 变量 | 说明 | 默认值 | 示例 |
 |------|------|--------|------|
+| `DATABASE_URL` | 数据库连接URL | 空（使用SQLite） | `"postgres://user:pass@host:5432/db"` |
 | `OPENAI_KEYS` | API Key 白名单（逗号分隔） | 空（开发模式） | `"key1,key2"` |
 | `MAX_ERROR_COUNT` | 错误次数阈值 | 100 | `50` |
 | `HTTP_PROXY` | HTTP代理地址 | 空 | `"http://127.0.0.1:7890"` |
@@ -478,8 +485,8 @@ server {
 
 1. **生产环境必须配置 `OPENAI_KEYS`**
 2. **使用 HTTPS 反向代理（Nginx + Let's Encrypt）**
-3. **定期备份 `data.sqlite3` 数据库**
-4. **限制数据库文件权限**（仅应用可读写）
+3. **定期备份数据库**（SQLite: `data.sqlite3`，或 PG/MySQL 数据库）
+4. **限制数据库访问权限**
 5. **配置防火墙规则，限制访问来源**
 
 ## 📄 许可证
